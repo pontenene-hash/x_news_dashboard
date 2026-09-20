@@ -20,6 +20,17 @@ APP_TITLE = "X投稿ネタ｜最新ニュース収集ダッシュボード"
 MAX_ARTICLES = 5
 REQUEST_TIMEOUT_SECONDS = 15
 GEMINI_MODEL = "gemini-3.5-flash-lite"
+RSS_PRESETS = {
+    "Yahoo!ニュース｜主要": "https://news.yahoo.co.jp/rss/topics/top-picks.xml",
+    "Yahoo!ニュース｜国内": "https://news.yahoo.co.jp/rss/topics/domestic.xml",
+    "Yahoo!ニュース｜国際": "https://news.yahoo.co.jp/rss/topics/world.xml",
+    "Yahoo!ニュース｜経済": "https://news.yahoo.co.jp/rss/topics/business.xml",
+    "Yahoo!ニュース｜エンタメ": "https://news.yahoo.co.jp/rss/topics/entertainment.xml",
+    "Yahoo!ニュース｜スポーツ": "https://news.yahoo.co.jp/rss/topics/sports.xml",
+    "Yahoo!ニュース｜IT": "https://news.yahoo.co.jp/rss/topics/it.xml",
+    "Yahoo!ニュース｜科学": "https://news.yahoo.co.jp/rss/topics/science.xml",
+    "その他のRSSを自分で入力": "",
+}
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -391,11 +402,20 @@ with st.sidebar:
     )
     st.caption(f"使用モデル：{GEMINI_MODEL}")
 
+selected_feed = st.selectbox(
+    "ニュースカテゴリーを選択",
+    options=list(RSS_PRESETS),
+    help="Yahoo!ニュースはカテゴリーを選ぶだけでURLが入ります。ほかのサイトは「その他」を選びます。",
+)
+
+selected_url = RSS_PRESETS[selected_feed]
 with st.form("rss_form"):
     feed_url = st.text_input(
         "RSSフィードのURL",
+        value=selected_url,
         placeholder="https://example.com/feed/",
-        help="RSSまたはAtomフィードの完全なURL（https://〜）を入力してください。",
+        help="選択したYahoo!ニュースのURLを編集することも、任意のRSS/Atom URLを入力することもできます。",
+        key=f"rss_url_{selected_feed}",
     )
     submitted = st.form_submit_button("最新ニュースを取得", use_container_width=True)
 
