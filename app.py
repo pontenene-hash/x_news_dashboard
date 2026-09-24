@@ -15,6 +15,11 @@ import feedparser
 import streamlit as st
 from google import genai
 
+try:
+    from googlenewsdecoder import gnewsdecoder
+except ImportError:  # The app can still show feeds if the optional decoder is unavailable.
+    gnewsdecoder = None
+
 
 APP_TITLE = "X投稿ネタ｜最新ニュース収集ダッシュボード"
 MAX_ARTICLES = 5
@@ -116,6 +121,12 @@ st.markdown(
         text-decoration: none !important;
     }
     .news-link:hover { text-decoration: underline !important; }
+    .link-note {
+        margin: 0.6rem 0 0 0;
+        color: #64748b;
+        font-size: 0.78rem;
+        line-height: 1.55;
+    }
     .feed-caption {
         color: #64748b;
         margin: 0.2rem 0 1.2rem 0;
@@ -194,13 +205,67 @@ def format_published_date(entry: feedparser.FeedParserDict) -> str:
 
 def article_from_entry(entry: feedparser.FeedParserDict) -> dict[str, object]:
     """Convert feedparser data into session-safe plain Python values."""
+    article_link = str(entry.get("link") or "").strip()
     return {
         "title": plain_text(entry.get("title"), max_length=180),
-        "link": str(entry.get("link") or "").strip(),
+        "link": article_link,
+        "google_news_link": article_link if is_google_news_url(article_link) else "",
+        "link_resolved": not is_google_news_url(article_link),
         "description": plain_text(entry.get("description") or entry.get("summary")),
         "published": format_published_date(entry),
         "posts": None,
     }
+
+
+def is_google_news_url(value: str) -> bool:
+    """Return True for Google News wrapper URLs used by RSS feeds."""
+    if not is_valid_http_url(value):
+        return False
+    parsed = urlparse(value.strip())
+    hostname = (parsed.hostname or "").lower()
+    return hostname == "news.google.com" and any(
+        marker in parsed.path for marker in ("/rss/articles/", "/articles/", "/read/")
+    )
+
+
+def resolve_publisher_links(articles: list[dict[str, object]]) -> int:
+    """Replace Google News wrapper links with publisher URLs when possible.
+
+    Resolution failure never blocks news display: the original Google News URL
+    remains available as a safe fallback.
+    """
+    targets: list[tuple[int, str]] = []
+    for index, article in enumerate(articles):
+        link = str(article.get("link") or "").strip()
+        if is_google_news_url(link):
+            targets.append((index, link))
+
+    if not targets or gnewsdecoder is None:
+        return 0
+
+    try:
+        raw_results = gnewsdecoder(
+            [link for _, link in targets],
+            interval=None,
+            timeout=float(REQUEST_TIMEOUT_SECONDS),
+        )
+    except Exception:
+        return 0
+
+    results = raw_results if isinstance(raw_results, list) else [raw_results]
+    resolved_count = 0
+    for (article_index, original_link), result in zip(targets, results):
+        if not isinstance(result, dict) or not result.get("success"):
+            continue
+        decoded_url = str(result.get("decoded_url") or "").strip()
+        if not is_valid_http_url(decoded_url) or is_google_news_url(decoded_url):
+            continue
+        articles[article_index]["google_news_link"] = original_link
+        articles[article_index]["link"] = decoded_url
+        articles[article_index]["link_resolved"] = True
+        resolved_count += 1
+
+    return resolved_count
 
 
 def normalize_post(post: str, fallback_tags: tuple[str, str]) -> str:
@@ -411,10 +476,19 @@ def render_news_card(
 
     link_html = (
         f'<a class="news-link" href="{safe_link}" target="_blank" '
-        'rel="noopener noreferrer">記事を開く →</a>'
+        'rel="noopener noreferrer">配信元の記事を開く →</a>'
         if is_valid_http_url(link)
         else '<span class="news-date">記事URLはありません</span>'
     )
+    if is_google_news_url(link):
+        link_note = (
+            '<p class="link-note">※ 配信元URLを取得できなかったため、'
+            'Googleニュース経由のリンクを使用します。</p>'
+        )
+    elif article.get("google_news_link"):
+        link_note = '<p class="link-note">✓ Xのカード表示に適した配信元URLへ変換済み</p>'
+    else:
+        link_note = ""
 
     st.markdown(
         f"""
@@ -424,6 +498,7 @@ def render_news_card(
             <div class="news-date">{published}</div>
             <p class="news-description">{description}</p>
             {link_html}
+            {link_note}
         </article>
         """,
         unsafe_allow_html=True,
@@ -489,10 +564,11 @@ with st.sidebar:
     st.subheader("Xへの投稿設定")
     include_article_url = st.checkbox(
         "ニュース記事のURLも付ける",
-        value=False,
+        value=True,
         help="オンにすると、X投稿画面へ記事URLも引き継ぎます。本文は投稿可能な長さへ自動調整されます。",
     )
     st.caption("投稿ボタンを押すと、文章が入力済みのX投稿画面が開きます。")
+    st.caption("Googleニュースは、Xで記事カードが表示されやすい配信元URLへ自動変換します。")
     st.caption(f"使用モデル：{GEMINI_MODEL}")
 
 selected_feed = st.selectbox(
@@ -530,10 +606,25 @@ if submitted:
                 st.info("このRSSフィードには表示できる記事がありませんでした。")
             else:
                 articles = [article_from_entry(entry) for entry in entries]
+                resolved_links = resolve_publisher_links(articles)
                 feed_title = plain_text(feed.feed.get("title"), max_length=100)
                 st.session_state["feed_title"] = feed_title if feed.feed.get("title") else ""
                 st.session_state["articles"] = articles
                 st.success(f"最新ニュースを{len(articles)}件取得しました。")
+                google_news_count = sum(
+                    bool(article.get("google_news_link")) for article in articles
+                )
+                if google_news_count:
+                    if resolved_links == google_news_count:
+                        st.info("Googleニュースを配信元の記事URLへ変換しました。Xで記事カードが表示されやすくなります。")
+                    elif resolved_links:
+                        st.info(
+                            f"Googleニュース{google_news_count}件中{resolved_links}件を、配信元の記事URLへ変換しました。"
+                        )
+                    else:
+                        st.warning(
+                            "配信元URLを取得できなかったため、Googleニュース経由のリンクを使用します。"
+                        )
 
                 if api_key_input.strip():
                     try:
