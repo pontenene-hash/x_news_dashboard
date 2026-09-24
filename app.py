@@ -7,7 +7,7 @@ import re
 from datetime import timezone
 from email.utils import parsedate_to_datetime
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
@@ -224,6 +224,32 @@ def normalize_post(post: str, fallback_tags: tuple[str, str]) -> str:
     return f"{body} {suffix}".strip()
 
 
+def shorten_post_for_article_url(post: str, max_length: int = 116) -> str:
+    """Shorten a generated post while preserving its two hashtags."""
+    compact = re.sub(r"\s+", " ", post).strip()
+    hashtags = re.findall(r"#[^\s#]+", compact)[:2]
+    body = re.sub(r"#[^\s#]+", "", compact)
+    body = re.sub(r"\s+", " ", body).strip()
+    suffix = " ".join(hashtags)
+    body_limit = max_length - len(suffix) - (1 if suffix else 0)
+    if len(body) > body_limit:
+        body = body[: max(1, body_limit - 1)].rstrip("、。,. ") + "…"
+    return f"{body} {suffix}".strip()
+
+
+def build_x_intent_url(
+    post: str, article_url: str, include_article_url: bool
+) -> tuple[str, str]:
+    """Build an X compose URL with prefilled text and an optional article URL."""
+    share_text = post
+    parameters: dict[str, str] = {}
+    if include_article_url and is_valid_http_url(article_url):
+        share_text = shorten_post_for_article_url(post)
+        parameters["url"] = article_url
+    parameters["text"] = share_text
+    return f"https://twitter.com/intent/tweet?{urlencode(parameters)}", share_text
+
+
 def parse_generated_posts(raw_text: str, article_count: int) -> list[dict[str, str]]:
     """Parse the model's JSON response and normalize every post."""
     cleaned = raw_text.strip()
@@ -330,7 +356,9 @@ def fetch_feed(feed_url: str) -> feedparser.FeedParserDict:
     return parsed_feed
 
 
-def render_news_card(article: dict[str, object], number: int) -> None:
+def render_news_card(
+    article: dict[str, object], number: int, include_article_url: bool
+) -> None:
     title = html.escape(str(article["title"]))
     link = str(article["link"])
     safe_link = html.escape(link, quote=True)
@@ -370,6 +398,16 @@ def render_news_card(article: dict[str, object], number: int) -> None:
             st.markdown(f'<div class="post-label">パターン{html.escape(label)}</div>', unsafe_allow_html=True)
             st.code(post, language=None, wrap_lines=True)
             st.markdown(f'<div class="char-count">{len(post)} / 140文字</div>', unsafe_allow_html=True)
+            x_intent_url, share_text = build_x_intent_url(
+                post, link, include_article_url
+            )
+            st.link_button(
+                "𝕏  Xで投稿する",
+                x_intent_url,
+                use_container_width=True,
+            )
+            if include_article_url and share_text != post:
+                st.caption("記事URLを追加するため、X投稿画面では本文を短く調整しています。")
 
 
 st.markdown(
@@ -403,6 +441,14 @@ with st.sidebar:
         help="パターンCに反映します。空欄の場合、AIは架空の経験を作りません。",
         height=130,
     )
+    st.divider()
+    st.subheader("Xへの投稿設定")
+    include_article_url = st.checkbox(
+        "ニュース記事のURLも付ける",
+        value=False,
+        help="オンにすると、X投稿画面へ記事URLも引き継ぎます。本文は投稿可能な長さへ自動調整されます。",
+    )
+    st.caption("投稿ボタンを押すと、文章が入力済みのX投稿画面が開きます。")
     st.caption(f"使用モデル：{GEMINI_MODEL}")
 
 selected_feed = st.selectbox(
@@ -496,6 +542,6 @@ if articles_in_state:
                 st.error(f"X投稿案を生成できませんでした。APIキーや利用状況をご確認ください。（{exc}）")
 
     for index, article in enumerate(articles_in_state, start=1):
-        render_news_card(article, index)
+        render_news_card(article, index, include_article_url)
 
 st.caption("※ RSS配信元によって、概要や公開日時が含まれない場合があります。AIの投稿案は公開前に内容をご確認ください。")
