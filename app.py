@@ -329,15 +329,59 @@ def generate_posts_for_articles(
 出力形式：
 {{"articles":[{{"index":1,"pattern_a":"...","pattern_b":"...","pattern_c":"..."}}]}}
 
-ニュース資料：
+    ニュース資料：
 {json.dumps(news_material, ensure_ascii=False)}
 """.strip()
 
     client = genai.Client(api_key=api_key)
-    interaction = client.interactions.create(model=GEMINI_MODEL, input=prompt)
-    if not interaction.output_text:
-        raise ValueError("LLMから投稿案が返されませんでした。")
-    return parse_generated_posts(interaction.output_text, len(articles))
+    response_schema = {
+        "type": "object",
+        "properties": {
+            "articles": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "index": {"type": "integer"},
+                        "pattern_a": {"type": "string"},
+                        "pattern_b": {"type": "string"},
+                        "pattern_c": {"type": "string"},
+                    },
+                    "required": ["index", "pattern_a", "pattern_b", "pattern_c"],
+                },
+            }
+        },
+        "required": ["articles"],
+    }
+    response_format = {
+        "type": "text",
+        "mime_type": "application/json",
+        "schema": response_schema,
+    }
+
+    last_error: Exception | None = None
+    for attempt in range(2):
+        retry_note = (
+            "\n前回は回答形式を読み取れませんでした。スキーマに一致するJSONを1回だけ返してください。"
+            if attempt
+            else ""
+        )
+        interaction = client.interactions.create(
+            model=GEMINI_MODEL,
+            input=prompt + retry_note,
+            response_format=response_format,
+        )
+        if not interaction.output_text:
+            last_error = ValueError("LLMから投稿案が返されませんでした。")
+            continue
+        try:
+            return parse_generated_posts(interaction.output_text, len(articles))
+        except (ValueError, TypeError) as exc:
+            last_error = exc
+
+    raise ValueError(
+        "AIの回答形式を読み取れませんでした。もう一度、投稿案の生成ボタンを押してください。"
+    ) from last_error
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -502,7 +546,7 @@ if submitted:
                         st.session_state["articles"] = articles
                         st.success("3パターンのX投稿案を作成しました。")
                     except Exception as exc:
-                        st.error(f"X投稿案を生成できませんでした。APIキーや利用状況をご確認ください。（{exc}）")
+                        st.error(f"X投稿案を生成できませんでした。もう一度お試しください。改善しない場合はAPIキーや利用状況をご確認ください。（{exc}）")
                 else:
                     st.warning("ニュースは取得できました。左側でGemini APIキーを入力すると投稿案も生成できます。")
 
@@ -539,7 +583,7 @@ if articles_in_state:
                 st.session_state["articles"] = articles_in_state
                 st.rerun()
             except Exception as exc:
-                st.error(f"X投稿案を生成できませんでした。APIキーや利用状況をご確認ください。（{exc}）")
+                st.error(f"X投稿案を生成できませんでした。もう一度お試しください。改善しない場合はAPIキーや利用状況をご確認ください。（{exc}）")
 
     for index, article in enumerate(articles_in_state, start=1):
         render_news_card(article, index, include_article_url)
