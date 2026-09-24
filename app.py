@@ -29,6 +29,9 @@ RSS_PRESETS = {
     "Yahoo!ニュース｜スポーツ": "https://news.yahoo.co.jp/rss/topics/sports.xml",
     "Yahoo!ニュース｜IT": "https://news.yahoo.co.jp/rss/topics/it.xml",
     "Yahoo!ニュース｜科学": "https://news.yahoo.co.jp/rss/topics/science.xml",
+    "健康ニュース｜健康・医療": "https://news.google.com/rss/search?q=%E5%81%A5%E5%BA%B7+%E5%8C%BB%E7%99%82&hl=ja&gl=JP&ceid=JP:ja",
+    "健康ニュース｜整体・鍼灸": "https://news.google.com/rss/search?q=%E6%95%B4%E4%BD%93+%E9%8D%BC%E7%81%B8&hl=ja&gl=JP&ceid=JP:ja",
+    "健康ニュース｜美容・健康": "https://news.google.com/rss/search?q=%E7%BE%8E%E5%AE%B9+%E5%81%A5%E5%BA%B7&hl=ja&gl=JP&ceid=JP:ja",
     "その他のRSSを自分で入力": "",
 }
 USER_AGENT = (
@@ -405,7 +408,7 @@ with st.sidebar:
 selected_feed = st.selectbox(
     "ニュースカテゴリーを選択",
     options=list(RSS_PRESETS),
-    help="Yahoo!ニュースはカテゴリーを選ぶだけでURLが入ります。ほかのサイトは「その他」を選びます。",
+    help="Yahoo!ニュースや健康ニュースは、カテゴリーを選ぶだけでURLが入ります。ほかのサイトは「その他」を選びます。",
 )
 
 selected_url = RSS_PRESETS[selected_feed]
